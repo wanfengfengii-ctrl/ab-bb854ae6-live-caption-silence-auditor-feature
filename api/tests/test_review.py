@@ -533,5 +533,90 @@ def test_gap_limits_allows_zero_category_ceilings():
     assert [v["type"] for v in data["violations"]] == ["head", "between", "tail"]
 
 
+# ---------------------------------------------------------------------------
+# source_ranges: cue-block line boundaries for locating the gap in the source
+# ---------------------------------------------------------------------------
+
+
+def test_source_ranges_point_at_cue_blocks_for_every_gap_type():
+    content = (
+        "WEBVTT\n\n"
+        "1\n00:00:01.000 --> 00:00:02.000\n第一行\n第二行\n\n"
+        "2\n00:00:04.000 --> 00:00:05.000\n单行\n"
+    )
+    data = review(content, 0, 8000, 10000).json()
+    head, between, tail = data["gaps"]
+
+    # Head gap: the first cue block (identifier line 3 through payload line 6).
+    assert head["source_ranges"] == [{"start_line": 3, "end_line": 6}]
+    # Between gap: the preceding block then the following block, in order.
+    assert between["source_ranges"] == [
+        {"start_line": 3, "end_line": 6},
+        {"start_line": 8, "end_line": 10},
+    ]
+    # Tail gap: the last cue block.
+    assert tail["source_ranges"] == [{"start_line": 8, "end_line": 10}]
+
+
+def test_source_ranges_without_identifier_start_at_timing_line():
+    body = vtt(cue(1000, 2000), cue(3000, 4000))
+    data = review(body, 0, 5000, 10000).json()
+    # Blocks are "00:00:01.000 --> ..." + one payload line each.
+    assert data["gaps"][0]["source_ranges"] == [
+        {"start_line": 3, "end_line": 4}
+    ]
+    assert data["gaps"][1]["source_ranges"] == [
+        {"start_line": 3, "end_line": 4},
+        {"start_line": 6, "end_line": 7},
+    ]
+    assert data["gaps"][2]["source_ranges"] == [
+        {"start_line": 6, "end_line": 7}
+    ]
+
+
+def test_source_ranges_cover_multi_line_payload_blocks():
+    # Three payload lines must all fall inside the located block.
+    content = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.000\n一\n二\n三\n\n"
+        "00:00:03.000 --> 00:00:04.000\n四\n"
+    )
+    data = review(content, 0, 5000, 10000).json()
+    assert data["gaps"][1]["source_ranges"] == [
+        {"start_line": 3, "end_line": 6},
+        {"start_line": 8, "end_line": 9},
+    ]
+
+
+def test_source_ranges_present_on_violations_including_zero_gap_review():
+    data = review(vtt(cue(0, 500), cue(501, 1000)), 0, 1000, 0).json()
+    violation = data["violations"][0]
+    assert violation["type"] == "between"
+    assert violation["source_ranges"] == [
+        {"start_line": 3, "end_line": 4},
+        {"start_line": 6, "end_line": 7},
+    ]
+    # A zero-duration between gap (touching cues) is still locatable.
+    touching = review(vtt(cue(0, 500), cue(500, 1000)), 0, 1000, 0).json()
+    zero_gap = next(g for g in touching["gaps"] if g["type"] == "between")
+    assert zero_gap["duration_ms"] == 0
+    assert len(zero_gap["source_ranges"]) == 2
+
+
+def test_source_ranges_are_additive_and_keep_legacy_fields():
+    data = review(vtt(cue(1000, 2000)), 0, 3000, 1500).json()
+    gap = data["gaps"][0]
+    # Existing keys and adjudication values are unchanged; source_ranges is
+    # the only addition.
+    assert set(gap.keys()) == {
+        "type", "start_ms", "end_ms", "duration_ms", "limit_ms",
+        "line", "to_line", "source_ranges",
+    }
+    assert (gap["start_ms"], gap["end_ms"], gap["duration_ms"],
+            gap["limit_ms"], gap["line"], gap["to_line"]) == (
+        0, 1000, 1000, 1500, 3, None,
+    )
+
+
 def test_health():
     assert client.get("/health").json() == {"status": "ok"}

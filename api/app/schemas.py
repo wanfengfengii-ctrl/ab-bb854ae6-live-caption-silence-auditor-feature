@@ -101,6 +101,20 @@ class ReviewRequest(BaseModel):
         return value
 
 
+class SourceRangeModel(BaseModel):
+    """1-based source line span of one cue block in the submitted WebVTT."""
+
+    start_line: int
+    end_line: int
+
+    @classmethod
+    def from_range(cls, source_range: Any) -> "SourceRangeModel":
+        return cls(
+            start_line=source_range.start_line,
+            end_line=source_range.end_line,
+        )
+
+
 class GapModel(BaseModel):
     type: str
     start_ms: int
@@ -109,9 +123,18 @@ class GapModel(BaseModel):
     limit_ms: int
     line: int | None = None
     to_line: int | None = None
+    # Cue blocks that form the gap boundaries (1-based source lines):
+    # one entry for head (the first cue) and tail (the last cue), two
+    # ordered entries for between (the preceding then the following cue).
+    source_ranges: list[SourceRangeModel] = Field(default_factory=list)
 
     @classmethod
     def from_gap(cls, gap: Gap) -> "GapModel":
+        source_ranges: list[SourceRangeModel] = []
+        if gap.from_block is not None:
+            source_ranges.append(SourceRangeModel.from_range(gap.from_block))
+        if gap.to_block is not None:
+            source_ranges.append(SourceRangeModel.from_range(gap.to_block))
         return cls(
             type=gap.type,
             start_ms=gap.start_ms,
@@ -120,6 +143,7 @@ class GapModel(BaseModel):
             limit_ms=gap.limit_ms,
             line=gap.line,
             to_line=gap.to_line,
+            source_ranges=source_ranges,
         )
 
 

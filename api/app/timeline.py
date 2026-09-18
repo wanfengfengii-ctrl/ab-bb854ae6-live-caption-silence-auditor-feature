@@ -70,8 +70,21 @@ def validate_timeline(
 
 
 @dataclass(frozen=True)
+class SourceRange:
+    """The original WebVTT lines of one cue block forming a gap boundary."""
+
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
 class Gap:
-    """A silence interval (no caption) on the program timeline."""
+    """A silence interval (no caption) on the program timeline.
+
+    ``from_block``/``to_block`` are the source line ranges of the cue
+    blocks that bound the gap: the cue after a head gap, both adjacent
+    cues for a between gap, the cue before a tail gap.
+    """
 
     type: str
     start_ms: int
@@ -80,6 +93,8 @@ class Gap:
     limit_ms: int                    # limit applied when adjudicating
     line: int | None = None          # cue line bounding the gap
     to_line: int | None = None       # second cue line for BETWEEN gaps
+    from_block: SourceRange | None = None
+    to_block: SourceRange | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +103,10 @@ class Review:
     max_gap_ms: int
     gaps: list[Gap]
     violations: list[Gap]
+
+
+def _block_of(cue: Cue) -> SourceRange:
+    return SourceRange(cue.block_start_line, cue.block_end_line)
 
 
 def review(
@@ -118,6 +137,7 @@ def review(
             duration_ms=cues[0].start_ms - program_start_ms,
             limit_ms=limits[HEAD],
             line=cues[0].line,
+            to_block=_block_of(cues[0]),
         )
     ]
 
@@ -131,6 +151,8 @@ def review(
                 limit_ms=limits[BETWEEN],
                 line=previous.line,
                 to_line=cue.line,
+                from_block=_block_of(previous),
+                to_block=_block_of(cue),
             )
         )
 
@@ -142,6 +164,7 @@ def review(
             duration_ms=program_end_ms - cues[-1].end_ms,
             limit_ms=limits[TAIL],
             line=cues[-1].line,
+            from_block=_block_of(cues[-1]),
         )
     )
 

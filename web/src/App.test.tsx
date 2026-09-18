@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -17,9 +23,9 @@ const passingResult: ReviewResult = {
   max_gap_ms: 1500,
   cue_count: 2,
   gaps: [
-    { type: "head", start_ms: 0, end_ms: 0, duration_ms: 0, limit_ms: 1500, line: 3, to_line: null },
-    { type: "between", start_ms: 2000, end_ms: 3500, duration_ms: 1500, limit_ms: 1500, line: 3, to_line: 6 },
-    { type: "tail", start_ms: 4000, end_ms: 4000, duration_ms: 0, limit_ms: 1500, line: 6, to_line: null },
+    { type: "head", start_ms: 0, end_ms: 0, duration_ms: 0, limit_ms: 1500, line: 3, to_line: null, source_ranges: [{ start_line: 3, end_line: 5 }] },
+    { type: "between", start_ms: 2000, end_ms: 3500, duration_ms: 1500, limit_ms: 1500, line: 3, to_line: 6, source_ranges: [{ start_line: 3, end_line: 5 }, { start_line: 7, end_line: 8 }] },
+    { type: "tail", start_ms: 4000, end_ms: 4000, duration_ms: 0, limit_ms: 1500, line: 6, to_line: null, source_ranges: [{ start_line: 7, end_line: 8 }] },
   ],
   violations: [],
 };
@@ -29,12 +35,12 @@ const failingResult: ReviewResult = {
   max_gap_ms: 2500,
   cue_count: 2,
   gaps: [
-    { type: "head", start_ms: 0, end_ms: 0, duration_ms: 0, limit_ms: 1500, line: 3, to_line: null },
-    { type: "between", start_ms: 2000, end_ms: 4500, duration_ms: 2500, limit_ms: 1500, line: 3, to_line: 6 },
-    { type: "tail", start_ms: 5000, end_ms: 5000, duration_ms: 0, limit_ms: 1500, line: 6, to_line: null },
+    { type: "head", start_ms: 0, end_ms: 0, duration_ms: 0, limit_ms: 1500, line: 3, to_line: null, source_ranges: [{ start_line: 3, end_line: 5 }] },
+    { type: "between", start_ms: 2000, end_ms: 4500, duration_ms: 2500, limit_ms: 1500, line: 3, to_line: 6, source_ranges: [{ start_line: 3, end_line: 5 }, { start_line: 7, end_line: 8 }] },
+    { type: "tail", start_ms: 5000, end_ms: 5000, duration_ms: 0, limit_ms: 1500, line: 6, to_line: null, source_ranges: [{ start_line: 7, end_line: 8 }] },
   ],
   violations: [
-    { type: "between", start_ms: 2000, end_ms: 4500, duration_ms: 2500, limit_ms: 1500, line: 3, to_line: 6 },
+    { type: "between", start_ms: 2000, end_ms: 4500, duration_ms: 2500, limit_ms: 1500, line: 3, to_line: 6, source_ranges: [{ start_line: 3, end_line: 5 }, { start_line: 7, end_line: 8 }] },
   ],
 };
 
@@ -402,5 +408,149 @@ describe("App page states", () => {
       "不能为 null",
     );
     expect(screen.queryByTestId("source-error")).not.toBeInTheDocument();
+  });
+
+  const TWO_CUE_VTT =
+    "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n第一行\n第二行\n\n" +
+    "00:00:04.500 --> 00:00:05.000\n后一块";
+
+  async function submitTwoCue(result: ReviewResult) {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(result));
+    render(<App />);
+    const user = userEvent.setup();
+    await user.clear(screen.getByTestId("input-vtt"));
+    await user.type(screen.getByTestId("input-vtt"), TWO_CUE_VTT);
+    await user.click(screen.getByTestId("submit"));
+    expect(await screen.findByTestId("verdict")).toBeInTheDocument();
+    return screen.getByTestId("input-vtt") as HTMLTextAreaElement;
+  }
+
+  it("locating a violation focuses the textarea and selects its cue block", async () => {
+    const located: ReviewResult = {
+      ...failingResult,
+      violations: [
+        {
+          ...failingResult.violations[0],
+          source_ranges: [
+            { start_line: 3, end_line: 5 },
+            { start_line: 7, end_line: 8 },
+          ],
+        },
+      ],
+    };
+    const textarea = await submitTwoCue(located);
+    const user = userEvent.setup();
+
+    await user.click(
+      within(screen.getByTestId("violation")).getByTestId("locate-source"),
+    );
+
+    expect(document.activeElement).toBe(textarea);
+    const selected = textarea.value.slice(
+      textarea.selectionStart,
+      textarea.selectionEnd,
+    );
+    expect(selected).toBe("00:00:00.000 --> 00:00:02.000\n第一行\n第二行");
+    expect(
+      await within(screen.getByTestId("violation")).findByTestId(
+        "locate-status",
+      ),
+    ).toHaveTextContent("第 3–5 行（1/2 块）");
+  });
+
+  it("repeated locate clicks on a between gap alternate both boundary blocks", async () => {
+    const textarea = await submitTwoCue(failingResult);
+    const user = userEvent.setup();
+    const button = within(screen.getByTestId("violation")).getByTestId(
+      "locate-source",
+    );
+
+    await user.click(button);
+    let selected = textarea.value.slice(
+      textarea.selectionStart,
+      textarea.selectionEnd,
+    );
+    expect(selected).toBe("00:00:00.000 --> 00:00:02.000\n第一行\n第二行");
+    expect(button).toHaveTextContent("定位原文（前块）");
+
+    await user.click(button);
+    selected = textarea.value.slice(
+      textarea.selectionStart,
+      textarea.selectionEnd,
+    );
+    expect(selected).toBe("00:00:04.500 --> 00:00:05.000\n后一块");
+    expect(button).toHaveTextContent("定位原文（后块）");
+    expect(
+      within(screen.getByTestId("violation")).getByTestId("locate-status"),
+    ).toHaveTextContent("2/2 块");
+
+    // A third click cycles back to the preceding block.
+    await user.click(button);
+    selected = textarea.value.slice(
+      textarea.selectionStart,
+      textarea.selectionEnd,
+    );
+    expect(selected).toBe("00:00:00.000 --> 00:00:02.000\n第一行\n第二行");
+  });
+
+  it("can locate a zero-duration between gap from the all-gaps table", async () => {
+    const zeroTouch: ReviewResult = {
+      passed: true,
+      max_gap_ms: 1000,
+      cue_count: 2,
+      gaps: [
+        { type: "head", start_ms: 0, end_ms: 0, duration_ms: 0, limit_ms: 1500, line: 3, to_line: null, source_ranges: [{ start_line: 3, end_line: 5 }] },
+        { type: "between", start_ms: 2000, end_ms: 2000, duration_ms: 0, limit_ms: 1500, line: 3, to_line: 7, source_ranges: [{ start_line: 3, end_line: 5 }, { start_line: 7, end_line: 8 }] },
+        { type: "tail", start_ms: 5000, end_ms: 5000, duration_ms: 0, limit_ms: 1500, line: 7, to_line: null, source_ranges: [{ start_line: 7, end_line: 8 }] },
+      ],
+      violations: [],
+    };
+    const textarea = await submitTwoCue(zeroTouch);
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("gap-row");
+    await user.click(within(rows[1]).getByTestId("locate-source"));
+    expect(
+      textarea.value.slice(textarea.selectionStart, textarea.selectionEnd),
+    ).toBe("00:00:00.000 --> 00:00:02.000\n第一行\n第二行");
+  });
+
+  it("disables locate and explains why when source ranges are missing", async () => {
+    const legacy: ReviewResult = {
+      ...failingResult,
+      gaps: failingResult.gaps.map((g) => ({ ...g, source_ranges: [] })),
+      violations: failingResult.violations.map((g) => ({
+        ...g,
+        source_ranges: [],
+      })),
+    };
+    await submitTwoCue(legacy);
+
+    const buttons = screen.getAllByTestId("locate-source");
+    expect(buttons.every((b) => b.hasAttribute("disabled"))).toBe(true);
+    expect(screen.getAllByTestId("locate-unavailable")[0]).toHaveTextContent(
+      "未携带定位数据",
+    );
+    // Results stay readable: verdict and rows are still rendered.
+    expect(screen.getByTestId("verdict")).toBeInTheDocument();
+    expect(screen.getAllByTestId("gap-row")).toHaveLength(3);
+  });
+
+  it("clears the old result and locate state as soon as the source is edited", async () => {
+    const textarea = await submitTwoCue(failingResult);
+    const user = userEvent.setup();
+    await user.click(
+      within(screen.getByTestId("violation")).getByTestId("locate-source"),
+    );
+    expect(
+      within(screen.getByTestId("violation")).getByTestId("locate-status"),
+    ).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: `${TWO_CUE_VTT} ` } });
+
+    expect(screen.queryByTestId("verdict")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("locate-status")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("locate-source")).not.toBeInTheDocument();
+    // The stale selection itself is dropped too.
+    expect(textarea.selectionStart).toBe(textarea.selectionEnd);
   });
 });

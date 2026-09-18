@@ -1,14 +1,20 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   type ApiError,
+  type Gap,
   type GapLimits,
   type GapType,
   type ReviewInput,
   type ReviewResult,
   postReview,
 } from "./api";
-import { ResultPanel } from "./components/ResultPanel";
+import {
+  ResultPanel,
+  gapKey,
+  type ActiveLocate,
+} from "./components/ResultPanel";
 import { integerErrorMessage, parseInteger } from "./numberInput";
+import { locateUnavailableReason, selectSourceRange } from "./sourceRange";
 
 const SAMPLE_VTT = `WEBVTT
 
@@ -67,6 +73,10 @@ export function ReviewPage() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [sourceError, setSourceError] = useState<ApiError | null>(null);
   const [result, setResult] = useState<ReviewResult | null>(null);
+  // Which gap/cue block the "定位原文" button last selected. Cleared the
+  // moment the WebVTT source is edited so it can never point at stale text.
+  const [activeLocate, setActiveLocate] = useState<ActiveLocate | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // While a review is in flight every config input is locked, so the
   // returned verdict can never be displayed under an edited configuration.
   const [loading, setLoading] = useState(false);
@@ -147,6 +157,7 @@ export function ReviewPage() {
     setResult(null);
     setSourceError(null);
     setFieldErrors({});
+    setActiveLocate(null);
 
     const input = buildInput();
     if (!input) return;
@@ -165,6 +176,35 @@ export function ReviewPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Editing the source invalidates both the old verdict and every locate
+  // selection: the returned line ranges belong to the previous submission.
+  function handleContentChange(next: string) {
+    setContent(next);
+    setResult(null);
+    setSourceError(null);
+    setFieldErrors((previous) =>
+      previous.content ? { ...previous, content: undefined } : previous,
+    );
+    setActiveLocate(null);
+  }
+
+  // A between gap is bounded by two cue blocks: repeated clicks alternate
+  // between them; head/tail gaps have a single boundary block.
+  function handleLocate(gap: Gap) {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const ranges = gap.source_ranges ?? [];
+    if (locateUnavailableReason(ranges, content) !== null) return;
+
+    const key = gapKey(gap);
+    let blockIndex = 0;
+    if (ranges.length > 1 && activeLocate?.key === key) {
+      blockIndex = (activeLocate.blockIndex + 1) % ranges.length;
+    }
+    setActiveLocate({ key, blockIndex });
+    selectSourceRange(textarea, ranges[blockIndex]);
   }
 
   const numberInput = (
@@ -294,13 +334,14 @@ export function ReviewPage() {
         <label className="field field--full">
           <span>{FIELD_LABELS.content}</span>
           <textarea
+            ref={textareaRef}
             value={content}
             rows={14}
             spellCheck={false}
             disabled={loading}
             data-testid="input-vtt"
             aria-invalid={Boolean(fieldErrors.content)}
-            onChange={(event) => setContent(event.target.value)}
+            onChange={(event) => handleContentChange(event.target.value)}
           />
           {fieldErrors.content && (
             <span className="field__error" data-testid="input-vtt-error">
@@ -335,7 +376,14 @@ export function ReviewPage() {
         </div>
       )}
 
-      {result && <ResultPanel result={result} />}
+      {result && (
+        <ResultPanel
+          result={result}
+          content={content}
+          activeLocate={activeLocate}
+          onLocate={handleLocate}
+        />
+      )}
     </>
   );
 }

@@ -2,6 +2,11 @@ export type GapType = "head" | "between" | "tail";
 
 export type GapLimits = Record<GapType, number>;
 
+export interface SourceRange {
+  start_line: number;
+  end_line: number;
+}
+
 export interface Gap {
   type: GapType;
   start_ms: number;
@@ -10,6 +15,7 @@ export interface Gap {
   limit_ms: number;
   line: number | null;
   to_line: number | null;
+  source_ranges: SourceRange[];
 }
 
 export interface ReviewResult {

@@ -187,6 +187,48 @@ textarea[aria-invalid="true"] {
   cursor: wait;
 }
 
+.button--small {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: #fff;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.button--small:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.button--small:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.locate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.locate__status {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+.locate__reason {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
 .alert {
   margin-top: 20px;
   background: var(--fail-bg);

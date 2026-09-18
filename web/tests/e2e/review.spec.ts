@@ -215,3 +215,120 @@ test("分类上限：等待审校结果期间表单锁定，结果与当前配�
   await expect(page.getByTestId("verdict")).toHaveText("✅ 审校通过");
   await expect(page.getByTestId("input-gap-head")).toBeEnabled();
 });
+
+// ---------------------------------------------------------------------------
+// 定位原文：从审校结果跳回 WebVTT 字幕块（浏览器经真实代理提交）
+// ---------------------------------------------------------------------------
+
+const IDENTIFIED_MULTILINE_VTT =
+  "WEBVTT\n\n" +
+  "cue-1\n00:00:02.000 --> 00:00:04.000\n第一行\n第二行\n\n" +
+  "cue-2\n00:00:07.000 --> 00:00:08.000\n后一块\n";
+
+const FIRST_BLOCK =
+  "cue-1\n00:00:02.000 --> 00:00:04.000\n第一行\n第二行";
+const SECOND_BLOCK = "cue-2\n00:00:07.000 --> 00:00:08.000\n后一块";
+
+async function selectedText(page: Page): Promise<string> {
+  return page
+    .getByTestId("input-vtt")
+    .evaluate((el: HTMLTextAreaElement) =>
+      el.value.slice(el.selectionStart, el.selectionEnd),
+    );
+}
+
+test("定位原文：经真实代理提交后从违规项选中含标识符和多行正文的字幕块", async ({ page }: { page: Page }) => {
+  await page.goto("/");
+  await page.getByTestId("input-start").fill("0");
+  await page.getByTestId("input-end").fill("10000");
+  await page.getByTestId("input-limit").fill("0");
+  await page.getByTestId("input-vtt").fill(IDENTIFIED_MULTILINE_VTT);
+  await submit(page);
+
+  // limit 0: head 2000ms / between 3000ms / tail 2000ms 全部违规。
+  await expect(page.getByTestId("verdict")).toHaveText("❌ 审校不通过");
+  const violations = page.getByTestId("violation");
+  await expect(violations).toHaveCount(3);
+
+  // 第一条违规是片头空档，边界块是带标识符和多行正文的第一块。
+  await violations.first().getByTestId("locate-source").click();
+
+  const textarea = page.getByTestId("input-vtt");
+  await expect(textarea).toBeFocused();
+  expect(await selectedText(page)).toBe(FIRST_BLOCK);
+  expect(
+    await violations.first().getByTestId("locate-status").textContent(),
+  ).toContain("第 3–6 行");
+});
+
+test("定位原文：字幕间空档重复点击可在前、后两个边界块间切换，零时长空档也可定位", async ({ page }: { page: Page }) => {
+  await page.goto("/");
+  await page.getByTestId("input-start").fill("0");
+  await page.getByTestId("input-end").fill("10000");
+  await page.getByTestId("input-limit").fill("0");
+  await page.getByTestId("input-vtt").fill(IDENTIFIED_MULTILINE_VTT);
+  await submit(page);
+
+  // 全部空档表：head / between / tail 三行，between 是第二行。
+  const rows = page.getByTestId("gap-row");
+  const betweenRow = rows.nth(1);
+  const betweenButton = betweenRow.getByTestId("locate-source");
+
+  await betweenButton.click();
+  expect(await selectedText(page)).toBe(FIRST_BLOCK);
+  expect(await betweenButton.textContent()).toContain("前块");
+
+  await betweenButton.click();
+  expect(await selectedText(page)).toBe(SECOND_BLOCK);
+  expect(await betweenButton.textContent()).toContain("后块");
+
+  // 再来一次循环回前块。
+  await betweenButton.click();
+  expect(await selectedText(page)).toBe(FIRST_BLOCK);
+
+  // 首尾相接的零时长 between 空档同样可以定位：两条紧贴字幕、上限放宽。
+  const touching =
+    "WEBVTT\n\n" +
+    "00:00:02.000 --> 00:00:04.000\n前一块\n\n" +
+    "00:00:04.000 --> 00:00:06.000\n紧贴块\n";
+  await page.getByTestId("input-limit").fill("10000");
+  await page.getByTestId("input-vtt").fill(touching);
+  await submit(page);
+  await expect(page.getByTestId("verdict")).toHaveText("✅ 审校通过");
+
+  const zeroRow = page.getByTestId("gap-row").nth(1);
+  await expect(zeroRow).toContainText("0");
+  await zeroRow.getByTestId("locate-source").click();
+  await expect(page.getByTestId("input-vtt")).toBeFocused();
+  expect(await selectedText(page)).toBe(
+    "00:00:02.000 --> 00:00:04.000\n前一块",
+  );
+});
+
+test("定位原文：修改原文后旧审校结果与定位状态立即消失", async ({ page }: { page: Page }) => {
+  await page.goto("/");
+  await page.getByTestId("input-start").fill("0");
+  await page.getByTestId("input-end").fill("10000");
+  await page.getByTestId("input-limit").fill("0");
+  await page.getByTestId("input-vtt").fill(IDENTIFIED_MULTILINE_VTT);
+  await submit(page);
+  await expect(page.getByTestId("verdict")).toBeVisible();
+
+  await page
+    .getByTestId("gap-row")
+    .nth(1)
+    .getByTestId("locate-source")
+    .click();
+  await expect(page.getByTestId("locate-status").first()).toBeVisible();
+  expect(await selectedText(page)).not.toBe("");
+
+  // 改动原文（无需重新提交）：旧结果与定位按钮立刻全部清空。
+  const textarea = page.getByTestId("input-vtt");
+  await textarea.press("End");
+  await textarea.type(" ");
+
+  await expect(page.getByTestId("verdict")).toHaveCount(0);
+  await expect(page.getByTestId("locate-source")).toHaveCount(0);
+  await expect(page.getByTestId("locate-status")).toHaveCount(0);
+  expect(await selectedText(page)).toBe("");
+});

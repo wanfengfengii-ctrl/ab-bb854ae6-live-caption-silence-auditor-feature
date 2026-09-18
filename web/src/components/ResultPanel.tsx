@@ -1,5 +1,15 @@
-import type { Gap, ReviewResult } from "../api";
+import type { Gap, ReviewResult, SourceRange } from "../api";
 import { GAP_TYPE_LABEL, formatMs } from "../format";
+import { locateUnavailableReason } from "../sourceRange";
+
+export interface ActiveLocate {
+  key: string;
+  blockIndex: number;
+}
+
+export function gapKey(gap: Gap): string {
+  return `${gap.type}:${gap.start_ms}-${gap.end_ms}`;
+}
 
 function GapLocation({ gap }: { gap: Gap }) {
   if (gap.type === "between") {
@@ -12,7 +22,86 @@ function GapLocation({ gap }: { gap: Gap }) {
   return <span>第 {gap.line} 行字幕{gap.type === "head" ? "之前" : "之后"}</span>;
 }
 
-export function ResultPanel({ result }: { result: ReviewResult }) {
+function rangeLabel(range: SourceRange): string {
+  return range.start_line === range.end_line
+    ? `第 ${range.start_line} 行`
+    : `第 ${range.start_line}–${range.end_line} 行`;
+}
+
+function LocateButton({
+  gap,
+  content,
+  active,
+  onLocate,
+}: {
+  gap: Gap;
+  content: string;
+  active: ActiveLocate | null;
+  onLocate: (gap: Gap) => void;
+}) {
+  const ranges = gap.source_ranges ?? [];
+  const key = gapKey(gap);
+  const isActive = active?.key === key;
+  const blockIndex = isActive ? active!.blockIndex : 0;
+  const disabledReason = locateUnavailableReason(ranges, content);
+  const betweenTarget =
+    gap.type === "between" && ranges.length === 2
+      ? blockIndex === 0
+        ? "前块"
+        : "后块"
+      : null;
+
+  if (disabledReason) {
+    return (
+      <span className="locate locate--unavailable">
+        <button
+          type="button"
+          className="button button--small"
+          data-testid="locate-source"
+          disabled
+          title={disabledReason}
+        >
+          定位原文
+        </button>
+        <span className="locate__reason" data-testid="locate-unavailable">
+          {disabledReason}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="locate">
+      <button
+        type="button"
+        className="button button--small"
+        data-testid="locate-source"
+        aria-pressed={isActive}
+        onClick={() => onLocate(gap)}
+      >
+        {betweenTarget ? `定位原文（${betweenTarget}）` : "定位原文"}
+      </button>
+      {isActive && (
+        <span className="locate__status" data-testid="locate-status">
+          已选中{rangeLabel(ranges[blockIndex])}
+          {ranges.length > 1 ? `（${blockIndex + 1}/${ranges.length} 块）` : ""}
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function ResultPanel({
+  result,
+  content,
+  activeLocate,
+  onLocate,
+}: {
+  result: ReviewResult;
+  content: string;
+  activeLocate: ActiveLocate | null;
+  onLocate: (gap: Gap) => void;
+}) {
   return (
     <section
       className={`result ${result.passed ? "result--pass" : "result--fail"}`}
@@ -52,6 +141,12 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
                   上限 {gap.limit_ms} ms
                 </span>
                 <GapLocation gap={gap} />
+                <LocateButton
+                  gap={gap}
+                  content={content}
+                  active={activeLocate}
+                  onLocate={onLocate}
+                />
               </li>
             ))}
           </ul>
@@ -69,6 +164,7 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
               <th>时长 (ms)</th>
               <th>采用上限 (ms)</th>
               <th>位置</th>
+              <th>原文</th>
             </tr>
           </thead>
           <tbody>
@@ -85,6 +181,14 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
                 <td>{gap.limit_ms}</td>
                 <td>
                   <GapLocation gap={gap} />
+                </td>
+                <td>
+                  <LocateButton
+                    gap={gap}
+                    content={content}
+                    active={activeLocate}
+                    onLocate={onLocate}
+                  />
                 </td>
               </tr>
             ))}

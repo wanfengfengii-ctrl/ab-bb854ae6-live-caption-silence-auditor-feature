@@ -2,7 +2,8 @@
 
 节目上线前的字幕审校 Web + API 系统，提供两个独立入口：
 
-- **空档审校**：发现**片头、字幕之间、片尾**过长无字幕空档。
+- **空档审校**：发现**片头、字幕之间、片尾**过长无字幕空档；每段结果附带
+  **定位原文**（`source_ranges`），可在页面上一键跳回形成该空档的字幕块。
 - **覆盖分布**：按时间桶统计字幕覆盖毫秒数与覆盖率，发现低覆盖时段。
 
 页面粘贴 WebVTT 与节目时间参数，后端使用维护中的
@@ -27,6 +28,12 @@
   不会产生部分结果；前端在每次新提交时清空旧结果与旧错误。
   - 可归属到字幕源内容的**首个**错误带原始 **1-based 行号**（含 cue identifier 偏移）。
   - 参数错误指出责任字段（`field`）。
+- **定位原文**：解析器在每条 Cue 上保留字幕块（标识符 + 时间轴 + 全部正文行）
+  的首尾行；片头、字幕间、片尾空档分别携带形成该空档的边界块
+  （字幕间为前、后两块，首尾相接的零时长空档同样可定位）。页面违规列表与
+  全部空档表格复用“定位原文”按钮：点击后聚焦 WebVTT 文本框并选中对应字幕块，
+  字幕间空档重复点击依次切换前、后两块；定位数据缺失时按钮禁用并说明原因。
+  一旦修改原文，旧审校结果与定位状态立即清除。
 
 ## 覆盖分布规则
 
@@ -54,14 +61,14 @@
 ```
 api/                FastAPI 服务
   app/main.py         路由（/api/review、/api/coverage）与统一 422 错误处理
-  app/parser.py       webvtt-py 解析 + 行号定位 + 毫秒归一化
-  app/timeline.py     时间轴校验与空档裁决
+  app/parser.py       webvtt-py 解析 + 行号定位 + 毫秒归一化 + 字幕块行界
+  app/timeline.py     时间轴校验与空档裁决（空档携带前后边界块）
   app/coverage.py     覆盖分布：分桶、跨桶拆分、低覆盖标记
   app/schemas.py      Pydantic 模型（审校与覆盖分布各自独立）
-  tests/              pytest（89 用例）
+  tests/              pytest（94 用例）
 web/                React + TS + Vite
   src/                 页签、审校/覆盖两个页面、API 客户端、结果面板
-  tests/e2e/           Playwright 真实联调（19 用例）
+  tests/e2e/           Playwright 真实联调（22 用例）
 verify/             一次性验收服务（pytest + Playwright 驱动真实 web/api 容器）
 docker-compose.yml
 ```
@@ -93,7 +100,9 @@ docker-compose.yml
 ```
 
 成功 `200`（每段空档都带本次采用的 `limit_ms`；省略 `gap_limits` 时等于
-`max_silence_ms`）：
+`max_silence_ms`；`gaps` 与 `violations` 的每段结果都追加 `source_ranges`，
+指向形成该空档的字幕块在原文中的 1-based 行界：片头/片尾各一块，字幕间
+依次为前、后两块）：
 
 ```json
 {
@@ -102,7 +111,8 @@ docker-compose.yml
   "cue_count": 3,
   "gaps": [
     {"type": "head", "start_ms": 0, "end_ms": 1000, "duration_ms": 1000,
-     "limit_ms": 1500, "line": 3, "to_line": null}
+     "limit_ms": 1500, "line": 3, "to_line": null,
+     "source_ranges": [{"start_line": 3, "end_line": 4}]}
   ],
   "violations": []
 }
@@ -184,13 +194,13 @@ cd web && npm install && npm run dev
 ### 测试
 
 ```bash
-# 后端裁决边界（89）
+# 后端裁决边界（94）
 cd api && python -m pytest
 
-# 前端页面状态（35，jsdom + mock fetch）
+# 前端页面状态（40，jsdom + mock fetch）
 cd web && npm test
 
-# 真实浏览器端到端（19，需要一个正在运行的 API 于 :8000）
+# 真实浏览器端到端（22，需要一个正在运行的 API 于 :8000）
 cd web && npx playwright install chromium
 npx playwright test          # 自动启动 Vite，/api 代理到真实 uvicorn
 WEB_URL=http://host:port npx playwright test   # 指向已运行的前端（如 nginx 生产镜像）
