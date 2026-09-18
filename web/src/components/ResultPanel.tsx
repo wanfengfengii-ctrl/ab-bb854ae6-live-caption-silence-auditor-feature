@@ -1,5 +1,6 @@
 import type { Gap, ReviewResult } from "../api";
 import { GAP_TYPE_LABEL, formatMs } from "../format";
+import { gapKey, type LocateState } from "../locate";
 
 function GapLocation({ gap }: { gap: Gap }) {
   if (gap.type === "between") {
@@ -12,7 +13,70 @@ function GapLocation({ gap }: { gap: Gap }) {
   return <span>第 {gap.line} 行字幕{gap.type === "head" ? "之前" : "之后"}</span>;
 }
 
-export function ResultPanel({ result }: { result: ReviewResult }) {
+const STEP_LABELS = ["· 前一块", "· 后一块"];
+
+// Shared 定位原文 button: focuses the WebVTT source and selects the cue
+// block(s) forming the gap. A between gap has two boundary blocks, so
+// repeated clicks cycle between them. When the response carries no locate
+// data the button stays disabled with the reason on its title, without
+// disturbing the rest of the result.
+function LocateButton({
+  gap,
+  locate,
+  onLocate,
+}: {
+  gap: Gap;
+  locate: LocateState | null;
+  onLocate: (gap: Gap) => void;
+}) {
+  const ranges = gap.source_ranges ?? [];
+  if (ranges.length === 0) {
+    return (
+      <button
+        type="button"
+        className="locate-button"
+        disabled
+        title="本次结果缺少原文定位数据，无法定位"
+        data-testid="locate-button"
+      >
+        定位原文
+      </button>
+    );
+  }
+  const active = locate !== null && locate.key === gapKey(gap);
+  const rangeIndex = active ? locate.rangeIndex : null;
+  return (
+    <button
+      type="button"
+      className={`locate-button${active ? " locate-button--active" : ""}`}
+      aria-pressed={active}
+      title={
+        ranges.length > 1
+          ? "选中形成该空档的字幕块，重复点击在前后两块间切换"
+          : "选中形成该空档的字幕块"
+      }
+      data-testid="locate-button"
+      onClick={() => onLocate(gap)}
+    >
+      定位原文
+      {active && rangeIndex !== null && ranges.length > 1 && (
+        <span className="locate-button__step" data-testid="locate-step">
+          {STEP_LABELS[rangeIndex] ?? `· 第 ${rangeIndex + 1} 块`}
+        </span>
+      )}
+    </button>
+  );
+}
+
+export function ResultPanel({
+  result,
+  locate,
+  onLocate,
+}: {
+  result: ReviewResult;
+  locate: LocateState | null;
+  onLocate: (gap: Gap) => void;
+}) {
   return (
     <section
       className={`result ${result.passed ? "result--pass" : "result--fail"}`}
@@ -52,6 +116,7 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
                   上限 {gap.limit_ms} ms
                 </span>
                 <GapLocation gap={gap} />
+                <LocateButton gap={gap} locate={locate} onLocate={onLocate} />
               </li>
             ))}
           </ul>
@@ -69,6 +134,7 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
               <th>时长 (ms)</th>
               <th>采用上限 (ms)</th>
               <th>位置</th>
+              <th>原文</th>
             </tr>
           </thead>
           <tbody>
@@ -85,6 +151,9 @@ export function ResultPanel({ result }: { result: ReviewResult }) {
                 <td>{gap.limit_ms}</td>
                 <td>
                   <GapLocation gap={gap} />
+                </td>
+                <td>
+                  <LocateButton gap={gap} locate={locate} onLocate={onLocate} />
                 </td>
               </tr>
             ))}

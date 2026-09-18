@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   type ApiError,
+  type Gap,
   type GapLimits,
   type GapType,
   type ReviewInput,
@@ -8,6 +9,7 @@ import {
   postReview,
 } from "./api";
 import { ResultPanel } from "./components/ResultPanel";
+import { gapKey, lineRangeToOffsets, type LocateState } from "./locate";
 import { integerErrorMessage, parseInteger } from "./numberInput";
 
 const SAMPLE_VTT = `WEBVTT
@@ -70,6 +72,36 @@ export function ReviewPage() {
   // While a review is in flight every config input is locked, so the
   // returned verdict can never be displayed under an edited configuration.
   const [loading, setLoading] = useState(false);
+
+  // Locate-in-source state: which gap is highlighted in the textarea and
+  // which of its boundary blocks is selected. The line numbers only match
+  // the submitted text, so any edit clears both result and locate state.
+  const vttRef = useRef<HTMLTextAreaElement | null>(null);
+  const [locate, setLocate] = useState<LocateState | null>(null);
+
+  function handleContentChange(value: string) {
+    setContent(value);
+    setResult(null);
+    setLocate(null);
+  }
+
+  function handleLocate(gap: Gap) {
+    const ranges = gap.source_ranges ?? [];
+    const textarea = vttRef.current;
+    if (ranges.length === 0 || textarea === null) return;
+    const key = gapKey(gap);
+    // Repeated clicks on the same gap cycle through its boundary blocks:
+    // a between gap alternates between the preceding and following cue.
+    const rangeIndex =
+      locate && locate.key === key
+        ? (locate.rangeIndex + 1) % ranges.length
+        : 0;
+    const offsets = lineRangeToOffsets(content, ranges[rangeIndex]);
+    if (!offsets) return;
+    textarea.focus();
+    textarea.setSelectionRange(offsets.start, offsets.end);
+    setLocate({ key, rangeIndex });
+  }
 
   function buildInput(): ReviewInput | null {
     const errors: FieldErrors = {};
@@ -147,6 +179,7 @@ export function ReviewPage() {
     setResult(null);
     setSourceError(null);
     setFieldErrors({});
+    setLocate(null);
 
     const input = buildInput();
     if (!input) return;
@@ -294,13 +327,14 @@ export function ReviewPage() {
         <label className="field field--full">
           <span>{FIELD_LABELS.content}</span>
           <textarea
+            ref={vttRef}
             value={content}
             rows={14}
             spellCheck={false}
             disabled={loading}
             data-testid="input-vtt"
             aria-invalid={Boolean(fieldErrors.content)}
-            onChange={(event) => setContent(event.target.value)}
+            onChange={(event) => handleContentChange(event.target.value)}
           />
           {fieldErrors.content && (
             <span className="field__error" data-testid="input-vtt-error">
@@ -335,7 +369,9 @@ export function ReviewPage() {
         </div>
       )}
 
-      {result && <ResultPanel result={result} />}
+      {result && (
+        <ResultPanel result={result} locate={locate} onLocate={handleLocate} />
+      )}
     </>
   );
 }

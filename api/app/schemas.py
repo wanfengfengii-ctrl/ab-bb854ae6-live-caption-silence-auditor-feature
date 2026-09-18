@@ -101,6 +101,13 @@ class ReviewRequest(BaseModel):
         return value
 
 
+class SourceRangeModel(BaseModel):
+    """1-based inclusive line span of one cue block in the submitted source."""
+
+    first_line: int
+    last_line: int
+
+
 class GapModel(BaseModel):
     type: str
     start_ms: int
@@ -109,6 +116,10 @@ class GapModel(BaseModel):
     limit_ms: int
     line: int | None = None
     to_line: int | None = None
+    # Boundary cue blocks forming the gap, in timeline order: a head gap
+    # carries only the first cue, a tail gap only the last cue, and a
+    # between gap the preceding cue followed by the following one.
+    source_ranges: list[SourceRangeModel]
 
     @classmethod
     def from_gap(cls, gap: Gap) -> "GapModel":
@@ -120,6 +131,13 @@ class GapModel(BaseModel):
             limit_ms=gap.limit_ms,
             line=gap.line,
             to_line=gap.to_line,
+            source_ranges=[
+                SourceRangeModel(
+                    first_line=cue.first_line, last_line=cue.last_line
+                )
+                for cue in (gap.before, gap.after)
+                if cue is not None
+            ],
         )
 
 

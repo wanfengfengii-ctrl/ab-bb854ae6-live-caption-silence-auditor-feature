@@ -215,3 +215,76 @@ test("分类上限：等待审校结果期间表单锁定，结果与当前配�
   await expect(page.getByTestId("verdict")).toHaveText("✅ 审校通过");
   await expect(page.getByTestId("input-gap-head")).toBeEnabled();
 });
+
+// Line map of LOCATE_VTT (1-based): block one spans lines 3-6 (identifier,
+// timing, two payload lines), block two spans lines 8-9.
+const LOCATE_VTT =
+  "WEBVTT\n\n" +
+  "cue-1\n" +
+  "00:00:01.000 --> 00:00:02.000\n" +
+  "第一行\n" +
+  "第二行\n\n" +
+  "00:00:04.000 --> 00:00:05.000\n" +
+  "第二块\n";
+
+const FIRST_BLOCK = "cue-1\n00:00:01.000 --> 00:00:02.000\n第一行\n第二行";
+const SECOND_BLOCK = "00:00:04.000 --> 00:00:05.000\n第二块";
+
+function selectedSourceText(page: Page): Promise<string> {
+  return page
+    .getByTestId("input-vtt")
+    .evaluate((el: HTMLTextAreaElement) =>
+      el.value.slice(el.selectionStart, el.selectionEnd),
+    );
+}
+
+test("定位原文：从违规项定位原文并选中对应字幕块，可切换前后两块", async ({ page }: { page: Page }) => {
+  await page.goto("/");
+  await page.getByTestId("input-start").fill("0");
+  await page.getByTestId("input-end").fill("6000");
+  await page.getByTestId("input-limit").fill("500");
+  await page.getByTestId("input-vtt").fill(LOCATE_VTT);
+  await submit(page);
+
+  // head 1000 / between 2000 / tail 1000 all exceed the 500 ms limit.
+  await expect(page.getByTestId("verdict")).toHaveText("❌ 审校不通过");
+  const betweenViolation = page
+    .getByTestId("violation")
+    .filter({ hasText: "字幕间隙" });
+  await expect(betweenViolation).toHaveCount(1);
+  const locateButton = betweenViolation.getByTestId("locate-button");
+
+  const textarea = page.getByTestId("input-vtt");
+  await locateButton.click();
+  await expect(textarea).toBeFocused();
+  expect(await selectedSourceText(page)).toBe(FIRST_BLOCK);
+
+  // A second click on the same gap switches to the following cue block.
+  await locateButton.click();
+  expect(await selectedSourceText(page)).toBe(SECOND_BLOCK);
+
+  // The all-gaps table reuses the same button and continues the cycle.
+  const betweenRow = page.getByTestId("gap-row").nth(1);
+  await betweenRow.getByTestId("locate-button").click();
+  expect(await selectedSourceText(page)).toBe(FIRST_BLOCK);
+});
+
+test("定位原文：修改原文后旧审校结果与定位立即消失", async ({ page }: { page: Page }) => {
+  await page.goto("/");
+  await page.getByTestId("input-limit").fill("500");
+  await submit(page);
+  await expect(page.getByTestId("verdict")).toBeVisible();
+
+  // Locate a block first so there is an active locate state.
+  await page.getByTestId("locate-button").first().click();
+  const textarea = page.getByTestId("input-vtt");
+  const selectionLength = await textarea.evaluate(
+    (el: HTMLTextAreaElement) => el.selectionEnd - el.selectionStart,
+  );
+  expect(selectionLength).toBeGreaterThan(0);
+
+  // Editing the source invalidates the submitted line numbers at once.
+  await textarea.fill("WEBVTT\n\n00:00:00.500 --> 00:00:01.500\n改动后的字幕\n");
+  await expect(page.getByTestId("verdict")).toHaveCount(0);
+  await expect(page.getByTestId("locate-button")).toHaveCount(0);
+});

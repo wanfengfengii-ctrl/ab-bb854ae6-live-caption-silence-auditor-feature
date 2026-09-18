@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { ReviewResult } from "./api";
+import type { Gap, ReviewResult } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -402,5 +402,192 @@ describe("App page states", () => {
       "不能为 null",
     );
     expect(screen.queryByTestId("source-error")).not.toBeInTheDocument();
+  });
+});
+
+// Line map of LOCATE_VTT (1-based):
+//   1 WEBVTT            4 timing cue 1      7 blank
+//   2 blank             5 payload line 1    8 timing cue 2
+//   3 identifier cue-1  6 payload line 2    9 payload
+const LOCATE_VTT = [
+  "WEBVTT",
+  "",
+  "cue-1",
+  "00:00:01.000 --> 00:00:02.000",
+  "第一行",
+  "第二行",
+  "",
+  "00:00:04.000 --> 00:00:05.000",
+  "第二块",
+].join("\n");
+
+const FIRST_BLOCK = "cue-1\n00:00:01.000 --> 00:00:02.000\n第一行\n第二行";
+const SECOND_BLOCK = "00:00:04.000 --> 00:00:05.000\n第二块";
+
+const locateGaps: Gap[] = [
+  {
+    type: "head", start_ms: 0, end_ms: 1000, duration_ms: 1000,
+    limit_ms: 500, line: 4, to_line: null,
+    source_ranges: [{ first_line: 3, last_line: 6 }],
+  },
+  {
+    type: "between", start_ms: 2000, end_ms: 4000, duration_ms: 2000,
+    limit_ms: 500, line: 4, to_line: 8,
+    source_ranges: [
+      { first_line: 3, last_line: 6 },
+      { first_line: 8, last_line: 9 },
+    ],
+  },
+  {
+    type: "tail", start_ms: 5000, end_ms: 6000, duration_ms: 1000,
+    limit_ms: 500, line: 8, to_line: null,
+    source_ranges: [{ first_line: 8, last_line: 9 }],
+  },
+];
+
+const locateResult: ReviewResult = {
+  passed: false,
+  max_gap_ms: 2000,
+  cue_count: 2,
+  gaps: locateGaps,
+  violations: locateGaps,
+};
+
+async function submitLocateReview(result: ReviewResult = locateResult) {
+  vi.mocked(fetch).mockResolvedValue(jsonResponse(result));
+  render(<App />);
+  fireEvent.change(screen.getByTestId("input-vtt"), {
+    target: { value: LOCATE_VTT },
+  });
+  await userEvent.click(screen.getByTestId("submit"));
+  await screen.findByTestId("verdict");
+}
+
+function selectedSourceText(): string {
+  const textarea = screen.getByTestId("input-vtt") as HTMLTextAreaElement;
+  return textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+}
+
+function violationRow(label: string): HTMLElement {
+  const row = screen
+    .getAllByTestId("violation")
+    .find((el) => el.textContent?.includes(label));
+  if (!row) throw new Error(`no violation row containing ${label}`);
+  return row;
+}
+
+describe("定位原文", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("focuses the source and selects the cue block forming a violation", async () => {
+    await submitLocateReview();
+    const user = userEvent.setup();
+
+    await user.click(
+      within(violationRow("片头空档")).getByTestId("locate-button"),
+    );
+
+    const textarea = screen.getByTestId("input-vtt") as HTMLTextAreaElement;
+    expect(textarea).toHaveFocus();
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+  });
+
+  it("cycles a between gap through its two boundary blocks", async () => {
+    await submitLocateReview();
+    const user = userEvent.setup();
+    const row = violationRow("字幕间隙");
+    const button = within(row).getByTestId("locate-button");
+
+    await user.click(button);
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+    expect(within(row).getByTestId("locate-step")).toHaveTextContent("前一块");
+
+    await user.click(button);
+    expect(selectedSourceText()).toBe(SECOND_BLOCK);
+    expect(within(row).getByTestId("locate-step")).toHaveTextContent("后一块");
+
+    // A third click wraps back to the preceding block.
+    await user.click(button);
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+  });
+
+  it("reuses the same locate cycle between the violations list and the gaps table", async () => {
+    await submitLocateReview();
+    const user = userEvent.setup();
+
+    const betweenRow = screen.getAllByTestId("gap-row")[1];
+    await user.click(within(betweenRow).getByTestId("locate-button"));
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+
+    // The violation entry for the same gap continues the same cycle.
+    await user.click(
+      within(violationRow("字幕间隙")).getByTestId("locate-button"),
+    );
+    expect(selectedSourceText()).toBe(SECOND_BLOCK);
+  });
+
+  it("locates zero-duration gaps", async () => {
+    const touching: ReviewResult = {
+      passed: true,
+      max_gap_ms: 0,
+      cue_count: 2,
+      gaps: locateGaps.map((gap) => ({
+        ...gap,
+        start_ms: gap.end_ms,
+        duration_ms: 0,
+        limit_ms: 0,
+      })),
+      violations: [],
+    };
+    await submitLocateReview(touching);
+    const user = userEvent.setup();
+
+    const rows = screen.getAllByTestId("gap-row");
+    await user.click(within(rows[1]).getByTestId("locate-button"));
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+    await user.click(within(rows[2]).getByTestId("locate-button"));
+    expect(selectedSourceText()).toBe(SECOND_BLOCK);
+  });
+
+  it("clears the review result and locate state as soon as the source is edited", async () => {
+    await submitLocateReview();
+    const user = userEvent.setup();
+    await user.click(
+      within(violationRow("字幕间隙")).getByTestId("locate-button"),
+    );
+    expect(selectedSourceText()).toBe(FIRST_BLOCK);
+
+    fireEvent.change(screen.getByTestId("input-vtt"), {
+      target: { value: `${LOCATE_VTT}\n` },
+    });
+
+    expect(screen.queryByTestId("verdict")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("locate-button")).not.toBeInTheDocument();
+  });
+
+  it("disables the locate button with a reason when locate data is missing", async () => {
+    // The passingResult fixture has no source_ranges (older response shape).
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(passingResult));
+    render(<App />);
+    await fillAndSubmit();
+    await screen.findByTestId("verdict");
+
+    const buttons = screen.getAllByTestId("locate-button");
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute(
+        "title",
+        "本次结果缺少原文定位数据，无法定位",
+      );
+    }
+    // The result itself stays fully readable.
+    expect(screen.getByTestId("max-gap")).toHaveTextContent("1500");
   });
 });

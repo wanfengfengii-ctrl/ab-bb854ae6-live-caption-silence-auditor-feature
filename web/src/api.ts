@@ -2,6 +2,12 @@ export type GapType = "head" | "between" | "tail";
 
 export type GapLimits = Record<GapType, number>;
 
+// 1-based inclusive line span of one cue block in the submitted source.
+export interface SourceRange {
+  first_line: number;
+  last_line: number;
+}
+
 export interface Gap {
   type: GapType;
   start_ms: number;
@@ -10,6 +16,9 @@ export interface Gap {
   limit_ms: number;
   line: number | null;
   to_line: number | null;
+  // Boundary cue blocks forming the gap (preceding block first). Optional:
+  // a response without locate data must still render, with locating off.
+  source_ranges?: SourceRange[];
 }
 
 export interface ReviewResult {

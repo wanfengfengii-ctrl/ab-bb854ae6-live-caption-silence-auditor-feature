@@ -44,11 +44,19 @@ BOM = "﻿"
 
 @dataclass(frozen=True)
 class Cue:
-    """One cue normalised to a millisecond interval."""
+    """One cue normalised to a millisecond interval.
+
+    ``line`` is the 1-based timing line used for error attribution;
+    ``first_line``/``last_line`` are the 1-based inclusive boundaries of
+    the whole cue block (identifier, timing and payload lines), so review
+    results can point back at the exact source block that formed a gap.
+    """
 
     start_ms: int
     end_ms: int
     line: int
+    first_line: int
+    last_line: int
     identifier: str | None = None
 
 
@@ -138,6 +146,8 @@ def parse_webvtt(content: str) -> list[Cue]:
                     start_ms=_timestamp_to_ms(caption, "start_time"),
                     end_ms=_timestamp_to_ms(caption, "end_time"),
                     line=timing_line,
+                    first_line=block_start,
+                    last_line=block_start + len(block_lines) - 1,
                     identifier=caption.identifier or None,
                 )
             )

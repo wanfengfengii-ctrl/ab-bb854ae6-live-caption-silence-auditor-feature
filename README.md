@@ -2,7 +2,8 @@
 
 节目上线前的字幕审校 Web + API 系统，提供两个独立入口：
 
-- **空档审校**：发现**片头、字幕之间、片尾**过长无字幕空档。
+- **空档审校**：发现**片头、字幕之间、片尾**过长无字幕空档；每段空档可
+  **定位原文**，直接选中形成该空档的字幕块（字幕间空档重复点击在前后两块间切换）。
 - **覆盖分布**：按时间桶统计字幕覆盖毫秒数与覆盖率，发现低覆盖时段。
 
 页面粘贴 WebVTT 与节目时间参数，后端使用维护中的
@@ -13,6 +14,9 @@
 
 - 空档 = 节目开始 → 第一条字幕（片头）、相邻字幕间（上一条结束 → 下一条开始）、
   最后一条字幕结束 → 节目结束（片尾）。
+- 每段空档附带 `source_ranges`：形成该空档的字幕块在原文中的 **1-based 首尾行**
+  （含标识符行与多行正文）。片头只有后块、片尾只有前块、字幕间为前后两块；
+  前端据此实现“定位原文”，零时长空档同样可定位。
 - 首尾相接的空档为 **0 ms**；空档时长 **等于**允许上限判为合格；
   **超过上限 1 ms** 即违规。
 - **分类上限**（可选）：开启后分别为片头 `head`、字幕间 `between`、片尾 `tail`
@@ -58,10 +62,10 @@ api/                FastAPI 服务
   app/timeline.py     时间轴校验与空档裁决
   app/coverage.py     覆盖分布：分桶、跨桶拆分、低覆盖标记
   app/schemas.py      Pydantic 模型（审校与覆盖分布各自独立）
-  tests/              pytest（89 用例）
+  tests/              pytest（93 用例）
 web/                React + TS + Vite
   src/                 页签、审校/覆盖两个页面、API 客户端、结果面板
-  tests/e2e/           Playwright 真实联调（19 用例）
+  tests/e2e/           Playwright 真实联调（21 用例）
 verify/             一次性验收服务（pytest + Playwright 驱动真实 web/api 容器）
 docker-compose.yml
 ```
@@ -102,7 +106,8 @@ docker-compose.yml
   "cue_count": 3,
   "gaps": [
     {"type": "head", "start_ms": 0, "end_ms": 1000, "duration_ms": 1000,
-     "limit_ms": 1500, "line": 3, "to_line": null}
+     "limit_ms": 1500, "line": 3, "to_line": null,
+     "source_ranges": [{"first_line": 3, "last_line": 4}]}
   ],
   "violations": []
 }
@@ -184,13 +189,13 @@ cd web && npm install && npm run dev
 ### 测试
 
 ```bash
-# 后端裁决边界（89）
+# 后端裁决边界（93）
 cd api && python -m pytest
 
-# 前端页面状态（35，jsdom + mock fetch）
+# 前端页面状态（45，jsdom + mock fetch）
 cd web && npm test
 
-# 真实浏览器端到端（19，需要一个正在运行的 API 于 :8000）
+# 真实浏览器端到端（21，需要一个正在运行的 API 于 :8000）
 cd web && npx playwright install chromium
 npx playwright test          # 自动启动 Vite，/api 代理到真实 uvicorn
 WEB_URL=http://host:port npx playwright test   # 指向已运行的前端（如 nginx 生产镜像）

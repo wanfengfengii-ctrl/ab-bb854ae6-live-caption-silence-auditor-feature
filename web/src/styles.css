@@ -294,6 +294,41 @@ tr.gap--zero td {
   color: var(--muted);
 }
 
+.locate-button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.locate-button:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.locate-button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.locate-button--active,
+.locate-button--active:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.locate-button__step {
+  font-weight: 400;
+  margin-left: 2px;
+}
+
 .form__row--threshold {
   grid-template-columns: 1fr;
 }

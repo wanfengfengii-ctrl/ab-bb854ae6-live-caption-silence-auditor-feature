@@ -370,6 +370,92 @@ def test_error_never_contains_partial_review():
 
 
 # ---------------------------------------------------------------------------
+# Source ranges (定位原文): boundary cue blocks of every gap
+# ---------------------------------------------------------------------------
+
+# Line map of IDENTIFIED_MULTILINE_VTT (1-based):
+#   1 WEBVTT            4 timing cue 1      7 blank
+#   2 blank             5 payload line 1    8 timing cue 2
+#   3 identifier cue-1  6 payload line 2    9 payload
+IDENTIFIED_MULTILINE_VTT = (
+    "WEBVTT\n"
+    "\n"
+    "cue-1\n"
+    "00:00:01.000 --> 00:00:02.000\n"
+    "第一行\n"
+    "第二行\n"
+    "\n"
+    "00:00:04.000 --> 00:00:05.000\n"
+    "第二块\n"
+)
+
+
+def test_source_ranges_cover_identifier_and_multiline_payload():
+    data = review(IDENTIFIED_MULTILINE_VTT, 0, 6000, 10000).json()
+    head, between, tail = data["gaps"]
+    # A head gap points at the first cue block (identifier line included).
+    assert head["source_ranges"] == [{"first_line": 3, "last_line": 6}]
+    # A between gap carries both boundary blocks, preceding cue first.
+    assert between["source_ranges"] == [
+        {"first_line": 3, "last_line": 6},
+        {"first_line": 8, "last_line": 9},
+    ]
+    # A tail gap points at the last cue block.
+    assert tail["source_ranges"] == [{"first_line": 8, "last_line": 9}]
+
+
+def test_zero_duration_gap_is_locatable():
+    # Touching cues produce a 0 ms between gap; its boundary blocks still
+    # locate the exact source lines.
+    body = vtt(cue(1000, 2000), cue(2000, 3000))
+    data = review(body, 1000, 3000, 0).json()
+    between = data["gaps"][1]
+    assert between["duration_ms"] == 0
+    assert between["source_ranges"] == [
+        {"first_line": 3, "last_line": 4},
+        {"first_line": 6, "last_line": 7},
+    ]
+    # The head/tail gaps are also 0 ms and remain locatable.
+    assert data["gaps"][0]["source_ranges"] == [{"first_line": 3, "last_line": 4}]
+    assert data["gaps"][2]["source_ranges"] == [{"first_line": 6, "last_line": 7}]
+
+
+def test_violations_carry_the_same_source_ranges_as_gaps():
+    data = review(IDENTIFIED_MULTILINE_VTT, 0, 6000, 500).json()
+    assert data["passed"] is False
+    by_interval = {
+        (g["start_ms"], g["end_ms"]): g["source_ranges"] for g in data["gaps"]
+    }
+    assert data["violations"]
+    for violation in data["violations"]:
+        assert violation["source_ranges"] == by_interval[
+            (violation["start_ms"], violation["end_ms"])
+        ]
+        assert violation["source_ranges"]
+
+
+def test_source_ranges_do_not_change_existing_fields_or_verdicts():
+    # Appending source_ranges must not alter any pre-existing response
+    # field or adjudication number.
+    body = vtt(cue(1000, 2000), cue(3000, 4000))
+    data = review(body, 0, 5000, 900).json()
+    assert data["passed"] is False
+    assert data["max_gap_ms"] == 1000
+    assert data["cue_count"] == 2
+    for gap in data["gaps"]:
+        assert set(gap.keys()) == {
+            "type", "start_ms", "end_ms", "duration_ms", "limit_ms",
+            "line", "to_line", "source_ranges",
+        }
+    assert [(g["type"], g["line"], g["to_line"]) for g in data["gaps"]] == [
+        ("head", 3, None),
+        ("between", 3, 6),
+        ("tail", 6, None),
+    ]
+    assert [g["limit_ms"] for g in data["gaps"]] == [900, 900, 900]
+
+
+# ---------------------------------------------------------------------------
 # Per-category gap limits (head / between / tail)
 # ---------------------------------------------------------------------------
 
